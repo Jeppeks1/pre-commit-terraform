@@ -569,4 +569,3 @@ start=$(($(date +%s%N)/1000000))
 # Output the time it took for the script to run
 end=$(($(date +%s%N)/1000000))
 echo "The terraform validation script executed in $((end-start)) ms."
-exit 1
