@@ -1,6 +1,8 @@
 #!C:/Program\ Files/Git/bin/bash.exe
-
 set -e
+
+# The terraform-docs command has to be invoked on the directory containing a terraform configuration.
+# This script can therefore not use require_serial: false as it does not operate on individual files.
 
 main() {
   declare argv
@@ -25,101 +27,49 @@ main() {
     esac
   done
 
-  local terraform_version
-  terraform_version=$(terraform version | head -1 | grep -c 0.12) || true
-
   if [[ ! $(command -v terraform-docs) ]]; then
     echo "ERROR: terraform-docs is required by terraform_docs pre-commit hook but is not installed or in the system's PATH."
     exit 1
   fi
 
   local is_old_terraform_docs
-  declare -a paths
+  declare -a staged_dir
   index=0
 
+  # Verify terraform-docs version
   is_old_terraform_docs=$(terraform-docs version | grep -o "v0.[1-7]" | tail -1)
-
-  if [[ "$is_old_terraform_docs" == "1" ]]; then # terraform-docs is older than 0.8 and terraform 0.12 is used
+  if [[ "$is_old_terraform_docs" == "1" ]]; then # terraform-docs is older than 0.8
     echo "The terraform-docs version must be 0.8+. Currently installed is $(terraform-docs --version)"
     exit 1
   fi
 
-  for file_with_path in "$@"; do
-    file_with_path="${file_with_path// /__REPLACED__SPACE__}"
+  # Get the modified and staged terraform files that are not to be deleted.
+  staged=$(git diff --staged --name-only --diff-filter=d)
 
-    paths[index]=$(dirname "$file_with_path")
-    (("index+=1"))
+  # Get the directory name of the file and put the value into the staged_dir array
+  for file in $staged; do
+    # Manually check the file extension for appropriate files.
+    if [[ $file == *".tf" ]] || [[ $file == *".tfvars" ]] ; then
+      staged_dir[index]=$(dirname "$file")
+      (("index+=1"))
+    fi
   done
 
-  for path_uniq in $(echo "${paths[*]}" | tr ' ' '\n' | sort -u); do
-    path_uniq="${path_uniq//__REPLACED__SPACE__/ }"
+  # Invoke the terraform-docs command and pipe the result to the README in the current folder
+  for distinct_dir in $(echo "${staged_dir[*]}" | tr ' ' '\n' | sort -u); do
+    echo $distinct_dir
 
-    pushd "$path_uniq" > /dev/null
+    pushd "$distinct_dir" > /dev/null
 
-    terraform-docs markdown table . $args >| ./README.md
+    # Save the result to a variable before attempting to write to the README
+    docs=$(terraform-docs markdown table . $args)
     
-    popd > /dev/null
-  done
-  exit 1
-}
-
-terraform_docs() {
-  readonly terraform_docs_awk_file="$1"
-  readonly args="$2"
-  readonly files="$3"
-
-  declare -a paths
-  declare -a tfvars_files
-
-  index=0
-
-  for file_with_path in $files; do
-    file_with_path="${file_with_path// /__REPLACED__SPACE__}"
-
-    paths[index]=$(dirname "$file_with_path")
-
-    if [[ "$file_with_path" == *".tfvars" ]]; then
-      tfvars_files+=("$file_with_path")
+    # Make sure the README will actually be updated, to avoid scenarios where a simple
+    # change in module/main.tf leads to terraform-docs being run on the module/ dir, but
+    # the README should not be updated, which would cause the pre-commit hook to fail.
+    if [[ ! "$(cat README.md)" == "$docs" ]]; then
+      echo "$docs" >| ./README.md
     fi
-
-    ((index += 1))
-  done
-
-  readonly tmp_file=$(mktemp)
-  readonly text_file="README.md"
-
-  for path_uniq in $(echo "${paths[*]}" | tr ' ' '\n' | sort -u); do
-    path_uniq="${path_uniq//__REPLACED__SPACE__/ }"
-
-    pushd "$path_uniq" > /dev/null
-
-    if [[ ! -f "$text_file" ]]; then
-      popd > /dev/null
-      continue
-    fi
-
-    if [[ "$terraform_docs_awk_file" == "0" ]]; then
-      # shellcheck disable=SC2086
-      terraform-docs md $args ./ > "$tmp_file"
-    else
-      # Can't append extension for mktemp, so renaming instead
-      tmp_file_docs=$(mktemp "${TMPDIR:-/tmp}/terraform-docs-XXXXXXXXXX")
-      mv "$tmp_file_docs" "$tmp_file_docs.tf"
-      tmp_file_docs_tf="$tmp_file_docs.tf"
-
-      awk -f "$terraform_docs_awk_file" ./*.tf > "$tmp_file_docs_tf"
-      # shellcheck disable=SC2086
-      terraform-docs md $args "$tmp_file_docs_tf" > "$tmp_file"
-      rm -f "$tmp_file_docs_tf"
-    fi
-
-    # Replace content between markers with the placeholder - https://stackoverflow.com/questions/1212799/how-do-i-extract-lines-between-two-line-delimiters-in-perl#1212834
-    perl -i -ne 'if (/BEGINNING OF PRE-COMMIT-TERRAFORM DOCS HOOK/../END OF PRE-COMMIT-TERRAFORM DOCS HOOK/) { print $_ if /BEGINNING OF PRE-COMMIT-TERRAFORM DOCS HOOK/; print "I_WANT_TO_BE_REPLACED\n$_" if /END OF PRE-COMMIT-TERRAFORM DOCS HOOK/;} else { print $_ }' "$text_file"
-
-    # Replace placeholder with the content of the file
-    perl -i -e 'open(F, "'"$tmp_file"'"); $f = join "", <F>; while(<>){if (/I_WANT_TO_BE_REPLACED/) {print $f} else {print $_};}' "$text_file"
-
-    rm -f "$tmp_file"
 
     popd > /dev/null
   done
@@ -646,4 +596,12 @@ getopt() {
   return $status
 }
 
+# Get the current time in ms
+start=$(($(date +%s%N)/1000000))
+
+# Invoke the main function
 [[ $BASH_SOURCE != "$0" ]] || main "$@"
+
+# Output the time it took for the script to run
+end=$(($(date +%s%N)/1000000))
+echo "The terraform documentation script executed in $((end-start)) ms."

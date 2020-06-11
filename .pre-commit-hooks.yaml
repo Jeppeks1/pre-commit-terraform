@@ -5,7 +5,6 @@
   language: script
   files: (\.tf|\.tfvars)$
   exclude: \.terraform\/.*$
-  require_serial: true
 
 - id: terraform_docs
   name: Terraform docs
@@ -16,15 +15,6 @@
   files: (\.tf)$
   exclude: \.terraform\/.*$
   require_serial: true
-
-- id: terraform_docs_without_aggregate_type_defaults
-  name: Terraform docs (without aggregate type defaults)
-  description: Inserts input and output documentation into README.md (using terraform-docs).
-  require_serial: true
-  entry: terraform_docs.sh
-  language: script
-  files: (\.tf)$
-  exclude: \.terraform\/.*$
 
 - id: terraform_docs_replace
   name: Terraform docs (overwrite README.md)
@@ -52,6 +42,7 @@
   files: (\.tf|\.tfvars)$
   exclude: \.terraform\/.*$
   args: [--args=/disable-rule:azurerm_sql_database_invalid_requested_service_objective_name]
+  require_serial: true
 
 - id: terragrunt_fmt
   name: Terragrunt fmt

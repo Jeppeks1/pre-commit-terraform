@@ -24,25 +24,24 @@ main() {
     esac
   done
 
-  tflint_ "$args" "$files"
-}
+# Get the modified and staged terraform files that are not to be deleted.
+staged=$(git diff --staged --name-only --diff-filter=d)
 
-tflint_() {
-  for file_with_path in $files; do
-    file_with_path="${file_with_path// /__REPLACED__SPACE__}"
+# Get the directory name of the file and put the value into the staged_dir array
+for file in $staged; do
+  # Manually check the file extension for appropriate files.
+  if [[ $file == *".tf" ]] || [[ $file == *".tfvars" ]] ; then
+    staged_dir[index]=$(dirname "$file")
+    (("index+=1"))
+  fi
+done
 
-    paths[index]=$(dirname "$file_with_path")
-
-    let "index+=1"
-  done
-
-  for path_uniq in $(echo "${paths[*]}" | tr ' ' '\n' | sort -u); do
-    path_uniq="${path_uniq//__REPLACED__SPACE__/ }"
-
-    pushd "$path_uniq" > /dev/null
-    tflint $args
-    popd > /dev/null
-  done
+# Loop over the unique directories that require linting
+for distinct_dir in $(echo "${staged_dir[*]}" | tr ' ' '\n' | sort -u); do
+  pushd "$distinct_dir" > /dev/null
+  tflint $args
+  popd > /dev/null
+done
 }
 
 getopt() {
@@ -561,4 +560,13 @@ getopt() {
   return $status
 }
 
+# Get the current time in ms
+start=$(($(date +%s%N)/1000000))
+
+# Invoke the main function
 [[ $BASH_SOURCE != "$0" ]] || main "$@"
+
+# Output the time it took for the script to run
+end=$(($(date +%s%N)/1000000))
+echo "The terraform validation script executed in $((end-start)) ms."
+exit 1
