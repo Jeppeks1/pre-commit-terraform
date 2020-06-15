@@ -27,14 +27,19 @@ main() {
     esac
   done
 
+  local is_old_terraform_docs
+  declare -a staged_dir
+  index=0
+
+  # Set the markers that indicate which section of the README.md file should be updated
+  startMarker='\[comment\]: \# (Start of pre-commit-terraform docs hook)'
+  endMarker='\[comment\]: \# (End of pre-commit-terraform docs hook)'
+
+  # Check if the terraform-docs command can be found
   if [[ ! $(command -v terraform-docs) ]]; then
     echo "ERROR: terraform-docs is required by terraform_docs pre-commit hook but is not installed or in the system's PATH."
     exit 1
   fi
-
-  local is_old_terraform_docs
-  declare -a staged_dir
-  index=0
 
   # Verify terraform-docs version
   is_old_terraform_docs=$(terraform-docs version | grep -o "v0.[1-7]" | tail -1)
@@ -49,7 +54,7 @@ main() {
   # Get the directory name of the file and put the value into the staged_dir array
   for file in $staged; do
     # Manually check the file extension for appropriate files.
-    if [[ $file == *".tf" ]] || [[ $file == *".tfvars" ]] ; then
+    if [[ $file == *".tf" ]]; then
       staged_dir[index]=$(dirname "$file")
       (("index+=1"))
     fi
@@ -57,18 +62,59 @@ main() {
 
   # Invoke the terraform-docs command and pipe the result to the README in the current folder
   for distinct_dir in $(echo "${staged_dir[*]}" | tr ' ' '\n' | sort -u); do
-    echo $distinct_dir
 
     pushd "$distinct_dir" > /dev/null
 
+    # Check if the README file exists
+    if [[ ! -f README.md ]]; then
+      # Pipe the markers into a new README file and continue as normal
+      echo "" >> README.md
+      echo "[comment]: # (Start of pre-commit-terraform docs hook)" >> README.md
+      echo "" >> README.md
+      echo "[comment]: # (End of pre-commit-terraform docs hook)" >> README.md
+      echo "" >> README.md
+    fi
+
+     # Check if the markers exist in the README file
+    if [[ ! $(cat README.md | grep "$startMarker") || ! $(cat README.md | grep "$endMarker") ]]; then
+      echo "The $distinct_dir/README.md file is not properly formatted."
+      echo "Please include the following comments somewhere in the README:"
+      echo ""
+      echo "[comment]: # (Start of pre-commit-terraform docs hook)"
+      echo ""
+      echo "[comment]: # (End of pre-commit-terraform docs hook)"
+      echo ""
+      echo "The Terraform documentation will be inserted between the two markers."
+      echo "Note: There has to be an empty line above and below the markers."
+      exit 1
+    fi
+
     # Save the result to a variable before attempting to write to the README
     docs=$(terraform-docs markdown table . $args)
-    
-    # Make sure the README will actually be updated, to avoid scenarios where a simple
-    # change in module/main.tf leads to terraform-docs being run on the module/ dir, but
-    # the README should not be updated, which would cause the pre-commit hook to fail.
-    if [[ ! "$(cat README.md)" == "$docs" ]]; then
-      echo "$docs" >| ./README.md
+
+    # Compress the docs output into a single line, so it can be used in a sed expression later.
+    # This command works by substituting newlines into the \n character.
+    oneline=$(echo "$docs" | sed --expression ':a;{N;s/\n/\\n/};ba')
+
+    # Escape the special sed characters ' / and \ by putting a backslash character in front.
+    # Also escape the underscore character, as that is the convention used by terraform-docs.
+    escaped=$(echo "$oneline" | sed --expression 's/[_\/'"'"']/\\&/g')
+
+    # Perform some sed magic to replace the documentation between the start and end markers.
+    # Link: https://stackoverflow.com/questions/13972095/sed-replace-text-between-placeholders
+    sed -n '/'"$startMarker"'/{p;:a;N;/'"$endMarker"'/!ba;s/.*\n/\n'"$(echo -e $escaped)"'\n\n/};p' README.md > TEMP-README.md
+
+    # We have to make sure the README will actually be updated, to avoid scenarios where a simple
+    # change in module/main.tf leads to terraform-docs being run on the module/ dir, but the README 
+    # should not be updated, which would cause the pre-commit hook to fail.
+    if [[ $(cmp TEMP-README.md README.md) ]]; then
+      # The READMEs are different. Replace the older version with the new version.
+      mv TEMP-README.md README.md
+    fi
+
+    # Remove the temporary README file if it exists, as it is no longer needed.
+    if [[ -f TEMP-README.md ]]; then
+      rm TEMP-README.md
     fi
 
     popd > /dev/null
